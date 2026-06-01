@@ -65,4 +65,24 @@ namespace OVRFW {
         }
         return text;
     }
+
+    bool Buttons::is_button_pressed(char side, const char* buttonName) const {
+        const ovrInputStateTrackedRemote remoteInputState = side == 'l'
+            ? leftRemoteInputState_
+            : rightRemoteInputState_;
+        if (buttonName == nullptr) {
+            return false;
+        }
+        const std::string name(buttonName);
+        if (side == 'r') {
+            if (name == "A") return (remoteInputState.Buttons & ovrButton_A) != 0;
+            if (name == "B") return (remoteInputState.Buttons & ovrButton_B) != 0;
+            if (name == "RJ") return (remoteInputState.Buttons & ovrButton_Joystick) != 0;
+        } else if (side == 'l') {
+            if (name == "X") return (remoteInputState.Buttons & ovrButton_X) != 0;
+            if (name == "Y") return (remoteInputState.Buttons & ovrButton_Y) != 0;
+            if (name == "LJ") return (remoteInputState.Buttons & ovrButton_Joystick) != 0;
+        }
+        return false;
+    }
 }

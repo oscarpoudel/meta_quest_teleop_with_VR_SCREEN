@@ -28,7 +28,7 @@ from rclpy.time import Time
 from scipy.spatial.transform import Rotation
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
-from meta_quest_teleop.reader import MetaQuestReader
+from TELEOPERATION_SONIC.meta_quest_teleop.meta_quest_teleop.reader import MetaQuestReader
 
 
 class MetaQuestTFPublisher(Node):

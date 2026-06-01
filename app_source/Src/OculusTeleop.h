@@ -32,6 +32,8 @@ Copyright   :   Copyright (c) Facebook Technologies, LLC and its affiliates. All
 
 #include "Input/HandModel.h"
 #include "Input/Skeleton.h"
+#include "TcpJpegReceiver.h"
+#include "CameraPanel.h"
 
 namespace OVRFW {
 
@@ -212,6 +214,20 @@ namespace OVRFW {
         }
         virtual const DeviceHapticState& GetRequestedHapticsState() {
             return PreviousHapticState;
+        }
+
+        OVR::Vector3f GetLinearVelocity() const {
+            return OVR::Vector3f(
+                Tracking.HeadPose.LinearVelocity.x,
+                Tracking.HeadPose.LinearVelocity.y,
+                Tracking.HeadPose.LinearVelocity.z);
+        }
+
+        OVR::Vector3f GetAngularVelocity() const {
+            return OVR::Vector3f(
+                Tracking.HeadPose.AngularVelocity.x,
+                Tracking.HeadPose.AngularVelocity.y,
+                Tracking.HeadPose.AngularVelocity.z);
         }
 
     protected:
@@ -506,6 +522,7 @@ namespace OVRFW {
         void SubmitCompositorLayers(const ovrApplFrameIn& in, ovrRendererOutput& out);
 
         static std::string TransformationMatrixToString(const OVR::Matrix4f& transformationMatrix);
+        static std::string Vector3fToString(const OVR::Vector3f& vector);
 
         class OvrGuiSys& GetGuiSys() {
             return *GuiSys;
@@ -561,6 +578,11 @@ namespace OVRFW {
 
         std::unordered_map<VRMenuObject*, std::function<void(void)>> ButtonHandlers;
         int MenuPressCount = 0;
+
+        std::unique_ptr<TcpJpegReceiver> CameraReceiver;
+        std::unique_ptr<CameraPanel> CameraPanelRenderer;
+        bool NextCameraComboWasPressed = false;
+        bool PrevCameraComboWasPressed = false;
 
     private:
         void ResetLaserPointer(ovrInputDeviceHandBase& trDevice);

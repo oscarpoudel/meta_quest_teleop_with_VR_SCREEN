@@ -116,3 +116,95 @@ If you haven’t used Meta Quest before, start it and follow the steps to create
 
 ### Stopping the app from adb
 It is possible to stop the app from adb. Use: `adb shell am force-stop com.rail.oculus.teleop`
+
+## Quest Camera Video Stream Server
+
+This fork includes a PC-side TCP JPEG stream server and native Quest APK receiver for sending robot camera images back to the same headset that is sending controller commands to the robot.
+
+### Protocol
+
+Server to Quest:
+
+```text
+uint32_be header_len
+header_len bytes JSON
+uint32_be jpeg_len
+jpeg_len bytes JPEG
+```
+
+Quest to server, optional ASCII commands:
+
+```text
+VIEW 0\n
+VIEW color\n
+NEXT\n
+PREV\n
+```
+
+Each Quest TCP client has its own selected view, so one headset can switch streams without affecting another.
+
+Inside the Quest APK:
+
+- `A+B` switches to the next view.
+- `X+Y` switches to the previous view.
+
+The camera panel is rendered as a head-locked overlay in the native Oculus app.
+
+### G1 Head Camera: RealSense RGB + Depth
+
+Run this on the machine that can access the G1 head RealSense camera:
+
+```bash
+python scripts/camera_stream_server.py \
+  --source realsense \
+  --view-names color,depth \
+  --host 0.0.0.0 \
+  --port 5566
+```
+
+This exposes two switchable views: `color` and `depth`.
+
+Launch the Quest reader with the PC IP that runs this camera server:
+
+```python
+from meta_quest_teleop.reader import MetaQuestReader
+
+reader = MetaQuestReader(camera_host="<PC_IP>", camera_port=5566, run=True)
+```
+
+Or through the SONIC manager:
+
+```bash
+python gear_sonic/scripts/pico_manager_thread_server.py \
+  --manager \
+  --reader quest \
+  --quest-camera-host <PC_IP> \
+  --quest-camera-port 5566
+```
+
+### Existing GEAR-SONIC ZMQ Camera Pipeline
+
+If `gear_sonic.camera.composed_camera` is already publishing on ZMQ port `5555`, bridge two camera keys to Quest:
+
+```bash
+python scripts/camera_stream_server.py \
+  --source zmq \
+  --zmq-ip localhost \
+  --zmq-port 5555 \
+  --zmq-keys head,ego_view \
+  --port 5566
+```
+
+Change `--zmq-keys` to match the keys present in `ImageMessageSchema.images`.
+
+### Two USB Cameras
+
+For quick bench testing without the robot:
+
+```bash
+python scripts/camera_stream_server.py \
+  --source opencv \
+  --opencv-devices 0,1 \
+  --view-names left,right \
+  --port 5566
+```

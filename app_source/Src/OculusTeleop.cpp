@@ -23,6 +23,8 @@ Copyright   : Copyright (c) Facebook Technologies, LLC and its affiliates. All r
 #include "Locale/OVR_Locale.h"
 #include "Misc/Log.h"
 #include "Buttons.h"
+#include "CameraPanel.h"
+#include "TcpJpegReceiver.h"
 
 #include "OVR_JSON.h"
 
@@ -31,6 +33,7 @@ Copyright   : Copyright (c) Facebook Technologies, LLC and its affiliates. All r
 #include <sstream>
 #include <iomanip>
 #include <array>
+#include <jni.h>
 #if defined(__ANDROID__)
 #include <sys/system_properties.h>
 #endif
@@ -399,6 +402,59 @@ VRMenuObject* NonStandardDevicesToggleButton = nullptr;
 
 uint64_t FrameIndexToPrint = 0;
 const float kHapticsGripThreshold = 0.1f;
+
+std::string GetIntentStringExtra(JNIEnv* env, jobject activity, const char* key, const char* fallback) {
+    jclass activityClass = env->GetObjectClass(activity);
+    jmethodID getIntent = env->GetMethodID(activityClass, "getIntent", "()Landroid/content/Intent;");
+    jobject intent = env->CallObjectMethod(activity, getIntent);
+    if (intent == nullptr) {
+        env->DeleteLocalRef(activityClass);
+        return fallback;
+    }
+
+    jclass intentClass = env->FindClass("android/content/Intent");
+    jmethodID getStringExtra = env->GetMethodID(
+        intentClass, "getStringExtra", "(Ljava/lang/String;)Ljava/lang/String;");
+    jstring jKey = env->NewStringUTF(key);
+    jstring jValue = static_cast<jstring>(env->CallObjectMethod(intent, getStringExtra, jKey));
+
+    std::string value = fallback;
+    if (jValue != nullptr) {
+        const char* chars = env->GetStringUTFChars(jValue, nullptr);
+        if (chars != nullptr) {
+            value = chars;
+            env->ReleaseStringUTFChars(jValue, chars);
+        }
+        env->DeleteLocalRef(jValue);
+    }
+
+    env->DeleteLocalRef(jKey);
+    env->DeleteLocalRef(intentClass);
+    env->DeleteLocalRef(intent);
+    env->DeleteLocalRef(activityClass);
+    return value;
+}
+
+int GetIntentIntExtra(JNIEnv* env, jobject activity, const char* key, int fallback) {
+    jclass activityClass = env->GetObjectClass(activity);
+    jmethodID getIntent = env->GetMethodID(activityClass, "getIntent", "()Landroid/content/Intent;");
+    jobject intent = env->CallObjectMethod(activity, getIntent);
+    if (intent == nullptr) {
+        env->DeleteLocalRef(activityClass);
+        return fallback;
+    }
+
+    jclass intentClass = env->FindClass("android/content/Intent");
+    jmethodID getIntExtra = env->GetMethodID(intentClass, "getIntExtra", "(Ljava/lang/String;I)I");
+    jstring jKey = env->NewStringUTF(key);
+    const int value = env->CallIntMethod(intent, getIntExtra, jKey, fallback);
+
+    env->DeleteLocalRef(jKey);
+    env->DeleteLocalRef(intentClass);
+    env->DeleteLocalRef(intent);
+    env->DeleteLocalRef(activityClass);
+    return value;
+}
 
 // Matrix to get from tracking pose to the OpenXR compatible 'grip' pose
 static const OVR::Matrix4f xfTrackedFromBinding = OVR::Matrix4f(OVR::Posef{
@@ -853,6 +909,21 @@ bool ovrVrInputStandard::AppInit(const OVRFW::ovrAppContext* context) {
 
     SurfaceRender.Init();
 
+    const std::string cameraHost = GetIntentStringExtra(
+        ctx.Env, ctx.ActivityObject, "camera_host", "192.168.123.164");
+    const int cameraPort = GetIntentIntExtra(ctx.Env, ctx.ActivityObject, "camera_port", 5566);
+    if (!cameraHost.empty()) {
+        CameraReceiver.reset(new TcpJpegReceiver(cameraHost, cameraPort));
+        CameraReceiver->Start();
+        CameraPanelRenderer.reset(new CameraPanel());
+        if (CameraPanelRenderer->Init(CameraReceiver.get())) {
+            ALOG("Quest camera panel initialized: %s:%d", cameraHost.c_str(), cameraPort);
+        } else {
+            ALOG("Quest camera panel failed to initialize");
+            CameraPanelRenderer.reset();
+        }
+    }
+
     return true;
 }
 
@@ -877,6 +948,14 @@ void ovrVrInputStandard::ResetLaserPointer(ovrInputDeviceHandBase& trDevice) {
 // ovrVrInputStandard::AppShutdown
 void ovrVrInputStandard::AppShutdown(const OVRFW::ovrAppContext* context) {
     ALOG("AppShutdown");
+    if (CameraPanelRenderer != nullptr) {
+        CameraPanelRenderer->Shutdown();
+        CameraPanelRenderer.reset();
+    }
+    if (CameraReceiver != nullptr) {
+        CameraReceiver->Stop();
+        CameraReceiver.reset();
+    }
     for (int i = InputDevices.size() - 1; i >= 0; --i) {
         OnDeviceDisconnected(InputDevices[i]->GetDeviceID());
     }
@@ -966,6 +1045,12 @@ std::string ovrVrInputStandard::TransformationMatrixToString(const OVR::Matrix4f
     char buffer[size];
     transformationMatrix.ToString(buffer, size);
     return std::string(buffer);
+}
+
+std::string ovrVrInputStandard::Vector3fToString(const OVR::Vector3f& vector) {
+    std::ostringstream ss;
+    ss << vector.x << " " << vector.y << " " << vector.z;
+    return ss.str();
 }
 
 void ovrVrInputStandard::RenderRunningFrame(
@@ -1220,6 +1305,14 @@ void ovrVrInputStandard::RenderRunningFrame(
         OVR::Matrix4f gripPose;
         OVR::Matrix4f modelPose;
         OVR::Matrix4f pointerPose;
+        unsigned int deviceId;
+        unsigned int deviceType;
+        int poseConfidence;
+        bool pointerValid;
+        bool pinching;
+        bool menuPressed;
+        OVR::Vector3f linearVelocity;
+        OVR::Vector3f angularVelocity;
     };
     std::vector<HandTransforms> handPoseTransformations;
 
@@ -1267,6 +1360,14 @@ void ovrVrInputStandard::RenderRunningFrame(
         transforms.gripPose = handPoseMatrix;
         transforms.modelPose = matDeviceModel;
         transforms.pointerPose = pointerMatrix;
+        transforms.deviceId = static_cast<unsigned int>(trDevice.GetDeviceID());
+        transforms.deviceType = static_cast<unsigned int>(trDevice.GetType());
+        transforms.poseConfidence = static_cast<int>(trDevice.GetHandPoseConfidence());
+        transforms.pointerValid = trDevice.IsPointerValid();
+        transforms.pinching = trDevice.IsPinching();
+        transforms.menuPressed = trDevice.IsMenuPressed();
+        transforms.linearVelocity = trDevice.GetLinearVelocity();
+        transforms.angularVelocity = trDevice.GetAngularVelocity();
         handPoseTransformations.push_back(transforms);
         
         TransformMatrices[axisSurfaces++] = handPoseMatrix;
@@ -1280,8 +1381,16 @@ void ovrVrInputStandard::RenderRunningFrame(
     }
 
     // send values - now sending all three transforms per hand
-    std::ostringstream output_ss, buttons_ss;
-    bool first = true;
+    std::ostringstream output_ss, buttons_ss, telemetry_ss;
+    const ovrTracking2 headTracking =
+        vrapi_GetPredictedTracking2(GetSessionObject(), in.PredictedDisplayTime);
+    output_ss << "h:" << TransformationMatrixToString(Matrix4f(headTracking.HeadPose.Pose));
+    telemetry_ss << "META&headTracked 1"
+                 << ",headLinVel " << headTracking.HeadPose.LinearVelocity.x << " "
+                 << headTracking.HeadPose.LinearVelocity.y << " " << headTracking.HeadPose.LinearVelocity.z
+                 << ",headAngVel " << headTracking.HeadPose.AngularVelocity.x << " "
+                 << headTracking.HeadPose.AngularVelocity.y << " " << headTracking.HeadPose.AngularVelocity.z;
+    bool first = false;
     
     // Send hand transforms
     for (auto it = std::begin(handPoseTransformations);
@@ -1299,11 +1408,44 @@ void ovrVrInputStandard::RenderRunningFrame(
                 << "|" << side << "p:"
                 << TransformationMatrixToString(it->pointerPose);
       buttons_ss << Buttons->current_to_string(side);
+      telemetry_ss << "," << side << "DeviceId " << it->deviceId
+                   << "," << side << "DeviceType " << it->deviceType
+                   << "," << side << "PoseConfidence " << it->poseConfidence
+                   << "," << side << "PointerValid " << (it->pointerValid ? 1 : 0)
+                   << "," << side << "Pinch " << (it->pinching ? 1 : 0)
+                   << "," << side << "Menu " << (it->menuPressed ? 1 : 0)
+                   << "," << side << "LinVel " << Vector3fToString(it->linearVelocity)
+                   << "," << side << "AngVel " << Vector3fToString(it->angularVelocity);
       first = false;
     }
-    output_ss << "&" << buttons_ss.str();
+    output_ss << "&";
+    if (!buttons_ss.str().empty()) {
+        telemetry_ss << "," << buttons_ss.str();
+    }
     __android_log_print(ANDROID_LOG_INFO, "wE9ryARX", "%s",
                         output_ss.str().c_str());
+    __android_log_print(ANDROID_LOG_INFO, "wE9ryARX", "%s",
+                        telemetry_ss.str().c_str());
+
+    if (CameraReceiver != nullptr) {
+        const bool nextComboPressed =
+            Buttons->is_button_pressed('r', "A") && Buttons->is_button_pressed('r', "B");
+        const bool prevComboPressed =
+            Buttons->is_button_pressed('l', "X") && Buttons->is_button_pressed('l', "Y");
+        if (nextComboPressed && !NextCameraComboWasPressed) {
+            CameraReceiver->SendCommand("NEXT");
+            ALOG("Camera stream: NEXT view requested");
+        }
+        if (prevComboPressed && !PrevCameraComboWasPressed) {
+            CameraReceiver->SendCommand("PREV");
+            ALOG("Camera stream: PREV view requested");
+        }
+        NextCameraComboWasPressed = nextComboPressed;
+        PrevCameraComboWasPressed = prevComboPressed;
+    }
+    if (CameraPanelRenderer != nullptr) {
+        CameraPanelRenderer->RenderFrame(out.Surfaces);
+    }
     // Add axis
     if (SampleConfiguration.RenderAxis && AxisSurface.surface != nullptr) {
         const_cast<OVRFW::ovrSurfaceDef*>(AxisSurface.surface)->numInstances = axisSurfaces;

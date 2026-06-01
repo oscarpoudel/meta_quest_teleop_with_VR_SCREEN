@@ -1,7 +1,6 @@
-rootProject.projectDir = new File(settingsDir, '../../../..')
+rootProject.projectDir = new File(settingsDir, '../../..')
 rootProject.name = "OculusTeleop"
 
-include ':', \
-	'VrSamples:SampleFramework:Projects:Android', \
-	'oculus_reader:app_source:Projects:Android'
+include ':teleop'
+project(':teleop').projectDir = settingsDir
 

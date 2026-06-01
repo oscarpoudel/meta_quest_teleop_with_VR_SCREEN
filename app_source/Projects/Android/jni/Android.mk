@@ -2,20 +2,22 @@ LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
 
-include ../../../../cflags.mk
+include ../../../ovr_sdk/cflags.mk
 
 LOCAL_MODULE			:= vrinputstandard
 
-LOCAL_C_INCLUDES 		:= 	$(LOCAL_PATH)/../../../../../SampleCommon/Src \
-							$(LOCAL_PATH)/../../../../../SampleFramework/Src \
-							$(LOCAL_PATH)/../../../../../VrApi/Include \
-							$(LOCAL_PATH)/../../../../../1stParty/OVR/Include \
-							$(LOCAL_PATH)/../../../../../1stParty/utilities/include \
-							$(LOCAL_PATH)/../../../../../3rdParty/stb/src \
+LOCAL_C_INCLUDES 		:= 	$(LOCAL_PATH)/../../../../ovr_sdk/SampleCommon/Src \
+							$(LOCAL_PATH)/../../../../ovr_sdk/SampleFramework/Src \
+							$(LOCAL_PATH)/../../../../ovr_sdk/VrApi/Include \
+							$(LOCAL_PATH)/../../../../ovr_sdk/1stParty/OVR/Include \
+							$(LOCAL_PATH)/../../../../ovr_sdk/1stParty/utilities/include \
+							$(LOCAL_PATH)/../../../../ovr_sdk/3rdParty/stb/src \
 
 LOCAL_SRC_FILES			:= 	../../../Src/main.cpp \
 							../../../Src/OculusTeleop.cpp \
 							../../../Src/Buttons.cpp \
+							../../../Src/TcpJpegReceiver.cpp \
+							../../../Src/CameraPanel.cpp \
 
 
 # include default libraries

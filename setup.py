@@ -10,7 +10,11 @@ setup(
     long_description=open("README.md").read(),
     install_requires=["numpy", "pure-python-adb"],
     package_data={
-        "": ["APK/teleop-pointer-frame-relative.apk", "APK/teleop-rail-orig.apk"]
+        "": [
+            "APK/teleop-debug.apk",
+            "APK/teleop-pointer-frame-relative.apk",
+            "APK/teleop-rail-orig.apk",
+        ]
     },
     include_package_data=True,
 )

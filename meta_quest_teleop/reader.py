@@ -10,7 +10,7 @@ import numpy as np
 from ppadb.client import Client as AdbClient
 from scipy.spatial.transform import Rotation
 
-from meta_quest_teleop.buttons_parser import parse_buttons
+from TELEOPERATION_SONIC.meta_quest_teleop.meta_quest_teleop.buttons_parser import parse_buttons
 
 
 def eprint(*args: Any, **kwargs: Any) -> None:
@@ -37,6 +37,8 @@ class MetaQuestReader:
         APK_name: str = "com.rail.oculus.teleop",
         run: bool = True,
         axis_mask: list[int] | None = None,
+        camera_host: str | None = None,
+        camera_port: int = 5566,
     ) -> None:
         """Initialize the MetaQuestReader.
 
@@ -47,6 +49,9 @@ class MetaQuestReader:
             run: Whether to start reader immediately. Defaults to True.
             axis_mask: Mask for axes [x, y, z, roll, pitch, yaw]. 1 = enabled, 0 = disabled.
                        Masked axes (x, y, z, roll, pitch, yaw) will be zeroed.
+            camera_host: Optional PC IP address that runs scripts/camera_stream_server.py.
+                If None, the APK uses its built-in default.
+            camera_port: TCP camera stream port. Defaults to 5566.
         """
         self.running = False
         self.last_transforms: dict[str, Any] | None = {}
@@ -57,6 +62,8 @@ class MetaQuestReader:
         self.ip_address = ip_address
         self.port = port
         self.APK_name = APK_name
+        self.camera_host = camera_host
+        self.camera_port = camera_port
 
         # Validate axis mask
         if axis_mask is not None:
@@ -119,10 +126,14 @@ class MetaQuestReader:
     def run(self) -> None:
         """Start reading data from the Meta Quest device."""
         self.running = True
-        self.device.shell(
+        command = (
             'am start -n "com.rail.oculus.teleop/com.rail.oculus.teleop.MainActivity" '
             "-a android.intent.action.MAIN -c android.intent.category.LAUNCHER"
         )
+        if self.camera_host:
+            command += f" --es camera_host {self.camera_host}"
+        command += f" --ei camera_port {int(self.camera_port)}"
+        self.device.shell(command)
         self.thread = threading.Thread(
             target=self.device.shell, args=("logcat -T 0", self.read_logcat_by_line)
         )
@@ -294,6 +305,9 @@ class MetaQuestReader:
         Returns:
             Tuple of transformations and button states.
         """
+        if string.startswith("META&"):
+            return {}, parse_buttons(string.split("&", 1)[1])
+
         try:
             transforms_string, buttons_string = string.split("&")
         except ValueError as e:
@@ -400,15 +414,65 @@ class MetaQuestReader:
         """
         hand_key = self._normalize_hand_key(hand)
 
-        # Use hand key directly as the pointer transform key
-        key = hand_key
-        if key in self._latest_transforms:
+        # Prefer the explicit grip transform from newer APKs, but keep the old
+        # single-letter key as a fallback for older APKs.
+        keys = [f"{hand_key}g", hand_key]
+        for key in keys:
+            if key not in self._latest_transforms:
+                continue
             with self._lock:
                 transform_openxr = self._latest_transforms[key].copy()
             if self.axis_mask is not None:
                 transform_openxr = self._apply_axis_mask(transform_openxr)
             return transform_openxr
         return None
+
+    def get_transform_openxr(self, key: str) -> np.ndarray | None:
+        """Get any raw transform published by the Quest APK.
+
+        Common keys from the updated APK are:
+        - ``h``: head pose
+        - ``lg`` / ``rg``: left/right grip pose
+        - ``lm`` / ``rm``: left/right rendered model pose
+        - ``lp`` / ``rp``: left/right pointer/ray pose
+        """
+        with self._lock:
+            transform = self._latest_transforms.get(key)
+            if transform is None:
+                return None
+            transform_openxr = transform.copy()
+        if self.axis_mask is not None and key != "h":
+            transform_openxr = self._apply_axis_mask(transform_openxr)
+        return transform_openxr
+
+    def get_head_transform_openxr(self) -> np.ndarray | None:
+        """Get the latest headset pose in OpenXR coordinates."""
+        return self.get_transform_openxr("h")
+
+    def get_pointer_transform_openxr(
+        self,
+        hand: Literal["left", "right", "l", "r"] = "right",
+    ) -> np.ndarray | None:
+        """Get the latest controller/hand pointer pose in OpenXR coordinates."""
+        hand_key = self._normalize_hand_key(hand)
+        return self.get_transform_openxr(f"{hand_key}p")
+
+    def get_grip_transform_openxr(
+        self,
+        hand: Literal["left", "right", "l", "r"] = "right",
+    ) -> np.ndarray | None:
+        """Get the latest controller/hand grip pose in OpenXR coordinates."""
+        hand_key = self._normalize_hand_key(hand)
+        return self.get_transform_openxr(f"{hand_key}g")
+
+    def get_motion_value(self, name: str, default: Any = None) -> Any:
+        """Get extra numeric telemetry published in the button/metadata section.
+
+        Examples: ``headLinVel``, ``headAngVel``, ``rLinVel``, ``lAngVel``,
+        ``rPoseConfidence``, ``lPointerValid``.
+        """
+        with self._lock:
+            return self._latest_buttons.get(name, default)
 
     def get_hand_controller_transform_ros(
         self,
@@ -640,8 +704,16 @@ class MetaQuestReader:
                 data = self.extract_data(line)
                 if data:
                     transforms, buttons = MetaQuestReader.process_data(data)
+                    merged_buttons = None
                     with self._lock:
-                        self.last_transforms, self.last_buttons = transforms, buttons
+                        if transforms:
+                            self.last_transforms = transforms
+                        if buttons:
+                            if self.last_buttons is None:
+                                self.last_buttons = {}
+                            self.last_buttons.update(buttons)
+                            self._latest_buttons.update(buttons)
+                            merged_buttons = dict(self._latest_buttons)
 
                     # Update validated transforms and handle button events
                     if transforms is not None:
@@ -650,9 +722,8 @@ class MetaQuestReader:
                             if validated is not None:
                                 self._latest_transforms[key] = validated
 
-                    if buttons is not None:
-                        self._latest_buttons = buttons
-                        self._handle_button_events(buttons)
+                    if merged_buttons is not None:
+                        self._handle_button_events(merged_buttons)
 
             except UnicodeDecodeError as e:
                 eprint(f"⚠️ Unicode decode error reading logcat line: {e}")
