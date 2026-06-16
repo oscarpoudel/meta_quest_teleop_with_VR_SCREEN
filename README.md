@@ -1,12 +1,13 @@
-# Meta Quest Reader
+# Meta Quest Teleop with VR Camera Screen
 
-Note this repo is an extension of: https://github.com/rail-berkeley/oculus_reader
+This repository extends [rail-berkeley/oculus_reader](https://github.com/rail-berkeley/oculus_reader) with:
+- A **head-locked camera overlay screen** rendered inside the Quest VR headset
+- A **PC-side TCP JPEG stream server** (`camera_stream_server.py`) for sending camera images to the Quest
+- **Bidirectional data flow**: PC sends camera frames to the Quest, and the Quest sends controller/hand transforms and button states back to the PC
 
-This repository provides the tool to read the position and pressed button from the Meta Quest device.
-
-Meta Quest reader consists of two elements: python script which receives the readings from the APK and the APK itself. **We use our pointer APK on the device** (see `meta_quest_teleop/APK/`). Currently the pose of the controllers and pressed buttons are transferred from the APK. This behavior can be extended using provided APK [source code](app_source).
-
-**Installing the APK on the device:** Follow the APK installation instructions from the [RAIL original repo](https://github.com/rail-berkeley/oculus_reader).
+The system consists of two parts:
+1. **APK** (`app_source/`) - Native C++ Oculus Mobile SDK app running on the Quest that renders VR scenes, a camera overlay panel, and streams controller data via ADB logcat
+2. **Python reader** (`meta_quest_teleop/`) - Reads the controller data over ADB and provides a Python API for transforms and button states
 
 ## Coordinate Systems: ROS vs OpenXR
 
@@ -31,7 +32,7 @@ This is the standard coordinate system used in ROS and is what you get when call
 ### Conversion Between Systems
 The conversion from OpenXR to ROS coordinates is performed using a static rotation quaternion `[0.5, -0.5, -0.5, 0.5]`. This transformation:
 - Rotates X from right → forward
-- Rotates Y from up → left  
+- Rotates Y from up → left
 - Rotates Z from backward → up
 
 ### Usage in Code
@@ -71,11 +72,11 @@ brew install android-platform-tools
 <summary>Instructions for new Meta Quest Device (Only run once after purchasing the Quest)</summary>
 
 1. Determine your Meta Quest account name:
-If you haven’t used Meta Quest before, start it and follow the steps to create your profile and get yourself started. Otherwise follow these steps to find out your username:
-    1. Go to: [https://www.oculus.com/](https://www.oculus.com/) 
+If you haven't used Meta Quest before, start it and follow the steps to create your profile and get yourself started. Otherwise follow these steps to find out your username:
+    1. Go to: [https://www.oculus.com/](https://www.oculus.com/)
     2. Log in to account:
     ![image_0](https://user-images.githubusercontent.com/14967831/106832581-c7288f00-6646-11eb-91e0-3b74e81a58ba.png)
-    3. After logging in **select your profile again** in top right corner and select **‘Profile’**
+    3. After logging in **select your profile again** in top right corner and select **'Profile'**
     ![image_1](https://user-images.githubusercontent.com/14967831/106832585-c859bc00-6646-11eb-9a3d-3a55f844ee37.png)
     4. You will be able to see your username on the following screen:
     ![image_2](https://user-images.githubusercontent.com/14967831/106832678-f7702d80-6646-11eb-823e-1001d6bffe01.png)
@@ -86,108 +87,69 @@ If you haven’t used Meta Quest before, start it and follow the steps to create
     4. Tap the device and then go to **More Settings** > **Developer Mode**.
     5. Turn on the **Developer Mode** toggle.
     6. Connect your device to your computer using a USB-C cable and then wear the device.
-    7. Accept **Allow USB Debugging** and **Always allow from this computer** when prompted to on the device.  
-        ![image_3](https://user-images.githubusercontent.com/14967831/104061507-048d2e80-51f9-11eb-8327-7917f6a1ab60.png)  
+    7. Accept **Allow USB Debugging** and **Always allow from this computer** when prompted to on the device.
+        ![image_3](https://user-images.githubusercontent.com/14967831/104061507-048d2e80-51f9-11eb-8327-7917f6a1ab60.png)
 
 </details>
 
-## How to run the code
+## Dependencies
 
-### Communication using the USB cable (easier to set up)
-
-1. Connect Oculus Quest to PC with USB cable. This is required to establish the connection.
-2. Run the exemplary file: `python meta_quest_reader/reader.py/reader.py`
-
-### Communication over the network (more portable)
-
-1. Make sure that Oculus Quest is connected to the same network as the computer.
-2. Connect Oculus Quest to PC with USB cable. This is required to establish the connection.
-3. Put on the headset and allow the permission as requested.
-4. Verify that a device is visible with: `adb devices`. The expected output:  
-`List of devices attached`  
-`    ce0551e7                device`
-5. Check the IP address of the headset:  
-    `adb shell ip route`  
-    Expected output:  
-    `10.0.30.0/19 dev wlan0  proto kernel  scope link  **src **10.0.32.101`
-6. Read the IP address of the device standing after `**src`.
-7. Provide the IP address when creating OculusReader object.
-8. Run the exemplary file: `python oculus_reader/reader.py`
-
-### Stopping the app from adb
-It is possible to stop the app from adb. Use: `adb shell am force-stop com.rail.oculus.teleop`
-
-## Quest Camera Video Stream Server
-
-This fork includes a PC-side TCP JPEG stream server and native Quest APK receiver for sending robot camera images back to the same headset that is sending controller commands to the robot.
-
-### Protocol
-
-Server to Quest:
-
-```text
-uint32_be header_len
-header_len bytes JSON
-uint32_be jpeg_len
-jpeg_len bytes JPEG
-```
-
-Quest to server, optional ASCII commands:
-
-```text
-VIEW 0\n
-VIEW color\n
-NEXT\n
-PREV\n
-```
-
-Each Quest TCP client has its own selected view, so one headset can switch streams without affecting another.
-
-Inside the Quest APK:
-
-- `A+B` switches to the next view.
-- `X+Y` switches to the previous view.
-
-The camera panel is rendered as a head-locked overlay in the native Oculus app.
-
-### G1 Head Camera: RealSense RGB + Depth
-
-Run this on the machine that can access the G1 head RealSense camera:
-
+Install Python dependencies:
 ```bash
-python scripts/camera_stream_server.py \
+pip install numpy scipy pure-python-adb
+```
+
+## How to run
+
+The `MetaQuestReader` handles ADB connection, APK installation, and data reading automatically.
+
+### Basic usage (USB, no camera)
+
+```python
+from meta_quest_teleop.reader import MetaQuestReader
+
+reader = MetaQuestReader()
+
+# Get transforms in OpenXR coordinates
+head = reader.get_head_transform_openxr()
+right_grip = reader.get_grip_transform_openxr("right")
+left_grip = reader.get_grip_transform_openxr("left")
+
+# Get button states
+a_pressed = reader.get_button_state("A")
+grip_value = reader.get_grip_value("right")
+trigger_value = reader.get_trigger_value("right")
+joystick = reader.get_joystick_value("right")
+```
+
+### With camera (requires ADB over network)
+
+The Quest APK can display a head-locked camera overlay. The PC runs a TCP JPEG stream server and the Quest connects to it.
+
+#### Step 1: Get the Quest IP address
+
+Connect the Quest via USB, then:
+```bash
+adb shell ip route
+```
+Look for the IP after `src`, e.g. `10.0.32.101`.
+
+#### Step 2: Start the camera stream server on PC
+
+Pick the appropriate camera source:
+
+**RealSense camera:**
+```bash
+python camera_stream_server.py \
   --source realsense \
   --view-names color,depth \
   --host 0.0.0.0 \
   --port 5566
 ```
 
-This exposes two switchable views: `color` and `depth`.
-
-Launch the Quest reader with the PC IP that runs this camera server:
-
-```python
-from meta_quest_teleop.reader import MetaQuestReader
-
-reader = MetaQuestReader(camera_host="<PC_IP>", camera_port=5566, run=True)
-```
-
-Or through the SONIC manager:
-
+**ZMQ camera (from gear-sonic pipeline):**
 ```bash
-python gear_sonic/scripts/pico_manager_thread_server.py \
-  --manager \
-  --reader quest \
-  --quest-camera-host <PC_IP> \
-  --quest-camera-port 5566
-```
-
-### Existing GEAR-SONIC ZMQ Camera Pipeline
-
-If `gear_sonic.camera.composed_camera` is already publishing on ZMQ port `5555`, bridge two camera keys to Quest:
-
-```bash
-python scripts/camera_stream_server.py \
+python camera_stream_server.py \
   --source zmq \
   --zmq-ip localhost \
   --zmq-port 5555 \
@@ -195,16 +157,92 @@ python scripts/camera_stream_server.py \
   --port 5566
 ```
 
-Change `--zmq-keys` to match the keys present in `ImageMessageSchema.images`.
-
-### Two USB Cameras
-
-For quick bench testing without the robot:
-
+**USB camera (OpenCV):**
 ```bash
-python scripts/camera_stream_server.py \
+python camera_stream_server.py \
   --source opencv \
   --opencv-devices 0,1 \
   --view-names left,right \
   --port 5566
 ```
+
+#### Step 3: Restart ADB in TCP mode (one time after USB connect)
+
+```bash
+adb tcpip 5555
+```
+You can now disconnect the USB cable.
+
+#### Step 4: Run the reader with camera
+
+```python
+from meta_quest_teleop.reader import MetaQuestReader
+
+reader = MetaQuestReader(
+    ip_address="<QUEST_IP_ADDRESS>",  # from step 1
+    camera_host="<PC_IP_ADDRESS>",    # IP of the machine running camera_stream_server.py
+    camera_port=5566,
+)
+```
+
+The APK will connect to the PC camera server and display the video feed as a head-locked overlay in VR.
+
+### Switching camera views
+
+While wearing the headset:
+- **A + B** buttons → switch to next camera view
+- **X + Y** buttons → switch to previous camera view
+
+### Stopping the app
+
+```bash
+adb shell am force-stop com.rail.oculus.teleop
+```
+
+## Camera Streaming Protocol
+
+Server to Quest:
+```
+uint32_be header_len
+header_len bytes JSON header
+uint32_be jpeg_len
+jpeg_len bytes JPEG
+```
+
+Quest to server (optional ASCII commands):
+```
+VIEW 0\n
+VIEW head\n
+NEXT\n
+PREV\n
+```
+
+Each Quest TCP client has independent view tracking, so multiple headsets can switch streams independently.
+
+The JSON header contains: `protocol`, `frame_id`, `timestamp`, `view_index`, `view_name`, `views`, `encoding`, `width`, `height`.
+
+## Data sent from Quest to PC
+
+The APK streams controller data via ADB logcat (tag: `wE9ryARX`). The `MetaQuestReader` parses this into transforms and button states:
+
+- **Head pose**: `4×4` transform matrix
+- **Per hand (left/right)**:
+  - Grip transform (`lg`/`rg`)
+  - Model transform (`lm`/`rm`)
+  - Pointer transform (`lp`/`rp`)
+  - Button states (A, B, X, Y, joystick click, thumb-up)
+  - Analog values (trigger, grip, joystick `x`/`y`)
+- **Telemetry**: linear/angular velocities, pose confidence, pinch state, device IDs
+
+## Building the APK from source
+
+See `app_source/README.md` for build instructions. The APK is compiled using the Oculus Mobile SDK v1.50.0.
+
+## ROS2 Visualization
+
+A ROS2 TF publisher is available in `ros_visualiser/`:
+```bash
+python ros_visualiser/ros2_tf_publisher.py
+```
+
+This publishes all hand transforms as TF frames in the `meta_world` frame. A Docker setup is also provided.
